@@ -84,6 +84,12 @@ ensure_running() {
     fi
 }
 
+# Kurze Docker-Container-ID (12 Zeichen) ermitteln, für Pane-Titel
+container_short_id() {
+    local name="$1"
+    docker inspect -f '{{.Id}}' "$name" 2>/dev/null | cut -c1-12
+}
+
 # Öffnet ein neues tmux-Fenster mit eigener Bash im Container
 open_container_window() {
     local name="$1"
@@ -126,13 +132,22 @@ open_containers_as_panes() {
             "$n" "$n" "$n"
     }
 
+    # Setzt den Anzeigenamen als Pane-USER-OPTION (@pane_label), NICHT als
+    # pane_title. pane_title wird sonst von der Bash im Container selbst per
+    # Escape-Sequenz (Titel aus .bashrc) laufend überschrieben. @pane_label
+    # kann von innerhalb des Containers nicht verändert werden.
+    set_pane_label() {
+        local target="$1" label="$2"
+        tmux set-option -p -t "$target" @pane_label "$label"
+    }
+
     if container_exists "$first"; then
         ensure_running "$first"
     else
         err "Container '$first' existiert nicht, überspringe."
     fi
     tmux new-window -t "$session" -n "$window_name" "$(shell_cmd_for "$first")"
-    tmux select-pane -t "$target" -T "$first"
+    set_pane_label "$target" "$first ($(container_short_id "$first"))"
 
     local name
     for name in "${containers[@]:1}"; do
@@ -142,14 +157,16 @@ open_containers_as_panes() {
         fi
         ensure_running "$name"
         tmux split-window -t "$target" "$(shell_cmd_for "$name")"
-        tmux select-pane -t "$target" -T "$name"
+        set_pane_label "$target" "$name ($(container_short_id "$name"))"
         tmux select-layout -t "$target" tiled
     done
 
-    # Kachel-Layout + Paneel-Titel (Containername) sichtbar machen
+    # Kachel-Layout + Paneel-Titel (Containername + ID) sichtbar machen.
+    # Fällt auf pane_title zurück, falls @pane_label (noch) nicht gesetzt ist.
     tmux select-layout -t "$target" tiled
     tmux set-window-option -t "$target" pane-border-status top
-    tmux set-window-option -t "$target" pane-border-format ' #{pane_title} '
+    tmux set-window-option -t "$target" pane-border-format \
+        ' #{?@pane_label,#{@pane_label},#{pane_title}} '
 
     log "Fenster '$window_name' mit ${#containers[@]} Paneelen geöffnet."
 }
