@@ -4,6 +4,9 @@
 #
 # Öffnet für existierende Docker-Container jeweils ein eigenes tmux-Fenster
 # mit einer interaktiven Bash IM Container (docker exec -it <container> bash).
+# Direkt danach wird automatisch "$SHELL" als erster Befehl in diese Bash
+# "eingetippt" (tmux send-keys) – damit landet man in der im Container
+# hinterlegten Standard-Shell des exec-Users.
 #
 #   - Fenster 0 "menu":      Dauerhaftes Steuerungsmenü zum Starten/Verwalten
 #   - Fenster 1 "dashboard": Live-Übersicht aller Container (watch docker ps)
@@ -107,6 +110,13 @@ open_container_window() {
     shell_cmd="docker exec -it '$name' bash || docker exec -it '$name' sh; echo; echo '--- Sitzung in $name beendet, Enter zum Schließen ---'; read -r"
 
     tmux new-window -t "$session" -n "$name" "$shell_cmd"
+
+    # $SHELL als ERSTEN Befehl in der frisch gestarteten Bash "eintippen".
+    # Kurze Pause, damit bash im Container Zeit hat, den Prompt bereitzustellen,
+    # bevor die Tasten gesendet werden.
+    sleep 0.3
+    tmux send-keys -t "${session}:${name}" '$SHELL' Enter
+
     log "Fenster für '$name' geöffnet."
 }
 
@@ -132,6 +142,14 @@ open_containers_as_panes() {
             "$n" "$n" "$n"
     }
 
+    # $SHELL als ersten Befehl in eine frisch gestartete Bash in einem
+    # bestimmten Paneel "eintippen" (siehe Kommentar in open_container_window).
+    send_shell_command() {
+        local target="$1"
+        sleep 0.3
+        tmux send-keys -t "$target" '$SHELL' Enter
+    }
+
     # Setzt den Anzeigenamen als Pane-USER-OPTION (@pane_label), NICHT als
     # pane_title. pane_title wird sonst von der Bash im Container selbst per
     # Escape-Sequenz (Titel aus .bashrc) laufend überschrieben. @pane_label
@@ -147,6 +165,7 @@ open_containers_as_panes() {
         err "Container '$first' existiert nicht, überspringe."
     fi
     tmux new-window -t "$session" -n "$window_name" "$(shell_cmd_for "$first")"
+    send_shell_command "$target"
     set_pane_label "$target" "$first ($(container_short_id "$first"))"
 
     local name
@@ -157,6 +176,7 @@ open_containers_as_panes() {
         fi
         ensure_running "$name"
         tmux split-window -t "$target" "$(shell_cmd_for "$name")"
+        send_shell_command "$target"
         set_pane_label "$target" "$name ($(container_short_id "$name"))"
         tmux select-layout -t "$target" tiled
     done
