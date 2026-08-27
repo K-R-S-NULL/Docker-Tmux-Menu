@@ -23,19 +23,19 @@
 # Tab-Wechsel: Alt+Links/Rechts, Alt+1..9, Alt+w (siehe configure_tmux_ux)
 #
 set -euo pipefail
- 
+
 SESSION_NAME="${SESSION_NAME:-docker-shells}"
 CONFIG_FILE="${DOCKER_GROUPS_FILE:-$HOME/.config/docker-tmux/groups.conf}"
 # Absoluter Pfad auf dieses Script, damit sich die Session im ersten
 # Fenster selbst im Menü-Modus (--menu) neu aufrufen kann.
 SCRIPT_PATH="$(readlink -f "${BASH_SOURCE[0]}")"
- 
+
 # ------------------------------------------------------------------
 # Hilfsfunktionen
 # ------------------------------------------------------------------
 log()  { printf '\033[1;34m[docker-shell-tmux]\033[0m %s\n' "$*" >&2; }
 err()  { printf '\033[1;31m[docker-shell-tmux]\033[0m %s\n' "$*" >&2; }
- 
+
 check_deps() {
     local missing=()
     for bin in tmux docker fzf; do
@@ -47,7 +47,7 @@ check_deps() {
         exit 1
     fi
 }
- 
+
 ensure_config() {
     if [[ ! -f "$CONFIG_FILE" ]]; then
         mkdir -p "$(dirname "$CONFIG_FILE")"
@@ -63,16 +63,16 @@ EOF
         log "Beispiel-Konfig angelegt unter: $CONFIG_FILE"
     fi
 }
- 
+
 # ------------------------------------------------------------------
 # Container-Handling
 # ------------------------------------------------------------------
- 
+
 # Prüft, ob Container existiert (egal ob laufend oder gestoppt)
 container_exists() {
     docker inspect --type=container "$1" >/dev/null 2>&1
 }
- 
+
 # Stellt sicher, dass der Container läuft; startet ihn bei Bedarf
 ensure_running() {
     local name="$1"
@@ -83,49 +83,49 @@ ensure_running() {
         docker start "$name" >/dev/null
     fi
 }
- 
+
 # Öffnet ein neues tmux-Fenster mit eigener Bash im Container
 open_container_window() {
     local name="$1"
     local session="$2"
- 
+
     if ! container_exists "$name"; then
         err "Container '$name' existiert nicht, überspringe."
         return 0
     fi
- 
+
     ensure_running "$name"
- 
+
     # bash bevorzugt, sh als Fallback (z.B. Alpine-Images)
     local shell_cmd
     shell_cmd="docker exec -it '$name' bash || docker exec -it '$name' sh; echo; echo '--- Sitzung in $name beendet, Enter zum Schließen ---'; read -r"
- 
+
     tmux new-window -t "$session" -n "$name" "$shell_cmd"
     log "Fenster für '$name' geöffnet."
 }
- 
+
 # Öffnet mehrere Container als Paneele (Splits) in EINEM gemeinsamen
 # neuen tmux-Fenster, statt jeweils ein eigenes Fenster zu erzeugen.
 open_containers_as_panes() {
     local session="$1"
     shift
     local containers=("$@")
- 
+
     if ((${#containers[@]} == 0)); then
         err "Keine Container ausgewählt."
         return 0
     fi
- 
+
     local window_name="multi-$(date +%H%M%S)"
     local first="${containers[0]}"
     local target="${session}:${window_name}"
- 
+
     shell_cmd_for() {
         local n="$1"
         printf "docker exec -it '%s' bash || docker exec -it '%s' sh; echo; echo '--- %s beendet ---'; read -r" \
             "$n" "$n" "$n"
     }
- 
+
     if container_exists "$first"; then
         ensure_running "$first"
     else
@@ -133,7 +133,7 @@ open_containers_as_panes() {
     fi
     tmux new-window -t "$session" -n "$window_name" "$(shell_cmd_for "$first")"
     tmux select-pane -t "$target" -T "$first"
- 
+
     local name
     for name in "${containers[@]:1}"; do
         if ! container_exists "$name"; then
@@ -145,37 +145,37 @@ open_containers_as_panes() {
         tmux select-pane -t "$target" -T "$name"
         tmux select-layout -t "$target" tiled
     done
- 
+
     # Kachel-Layout + Paneel-Titel (Containername) sichtbar machen
     tmux select-layout -t "$target" tiled
     tmux set-window-option -t "$target" pane-border-status top
     tmux set-window-option -t "$target" pane-border-format ' #{pane_title} '
- 
+
     log "Fenster '$window_name' mit ${#containers[@]} Paneelen geöffnet."
 }
- 
+
 # ------------------------------------------------------------------
 # Auswahl-Menüs
 # ------------------------------------------------------------------
- 
+
 list_containers() {
     docker ps -a --format '{{.Names}}\t{{.Image}}\t{{.Status}}' | sort
 }
- 
+
 pick_single_container() {
     list_containers \
         | fzf --prompt="Container wählen> " --height=50% --border \
               --header='Name / Image / Status' \
         | awk -F'\t' '{print $1}'
 }
- 
+
 pick_multiple_containers() {
     list_containers \
         | fzf --multi --prompt="Container wählen (Tab=Mehrfachauswahl)> " --height=50% --border \
               --header='Name / Image / Status' \
         | awk -F'\t' '{print $1}'
 }
- 
+
 # Liest Gruppen aus CONFIG_FILE, gibt "name:container1,container2" pro Zeile aus
 parse_groups() {
     grep -vE '^\s*(#|$)' "$CONFIG_FILE" 2>/dev/null | while IFS=':' read -r gname members; do
@@ -184,7 +184,7 @@ parse_groups() {
         [[ -n "$gname" && -n "$members" ]] && printf '%s:%s\n' "$gname" "$members"
     done
 }
- 
+
 pick_group() {
     parse_groups \
         | fzf --prompt="Gruppe wählen> " --height=40% --border \
@@ -192,49 +192,67 @@ pick_group() {
               --preview 'echo "Container: "; echo {2} | tr "," "\n"' \
               --preview-window=right:50%:wrap
 }
- 
+
 # ------------------------------------------------------------------
 # Session-Handling
 # ------------------------------------------------------------------
- 
+
 session_exists() {
     tmux has-session -t "$SESSION_NAME" 2>/dev/null
 }
- 
+
 # Bequeme Shortcuts zum Wechseln zwischen den Fenstern (Tabs), ohne dass
 # jedes Mal die Prefix-Taste (Strg+b) nötig ist. Wirkt serverweit, stört
 # also auch bei mehreren Sessions nicht.
 configure_tmux_ux() {
     # Fenster per Mausklick in der Statuszeile anwählen
     tmux set-option -g mouse on
- 
+
     # Alt+Pfeil links/rechts: vorheriges/nächstes Fenster
     tmux bind-key -n M-Left  previous-window
     tmux bind-key -n M-Right next-window
- 
+
     # Alt+Shift+Pfeil: aktuelles Fenster in der Reihenfolge verschieben
     tmux bind-key -n M-S-Left  swap-window -t -1
     tmux bind-key -n M-S-Right swap-window -t +1
- 
+
     # Alt+1..9: direkt zu Fenster Nummer 1..9 springen
     for i in 1 2 3 4 5 6 7 8 9; do
         tmux bind-key -n "M-$i" select-window -t ":${i}"
     done
- 
+
     # Alt+w: interaktive Fensterliste (fuzzy) öffnen, ohne Prefix-Taste
     tmux bind-key -n M-w choose-window
- 
+
     # Fenster werden bei Löschung neu durchnummeriert (keine Lücken)
     tmux set-option -g renumber-windows on
- 
+
     # Statuszeile: aktuelles Fenster deutlich hervorheben
     tmux set-option -g status-style 'bg=colour235,fg=colour250'
     tmux set-option -g window-status-current-style 'bg=colour39,fg=colour232,bold'
     tmux set-option -g window-status-format ' #I:#W '
     tmux set-option -g window-status-current-format ' #I:#W '
     tmux set-option -g status-interval 5
+
+    # Doppelklick auf Fenstername -> direkt umbenennen.
+    # (Bewusst NICHT verschachtelt in einem display-menu-Eintrag: command-prompt
+    # wird dort zweimal geparst und die Quotes brechen dabei leicht, wodurch
+    # sich das Menü schließt, bevor man etwas eingeben kann. Als direkte
+    # Mouse-Bindung ist es dagegen zuverlässig.)
+    tmux bind-key -n DoubleClick1Status \
+        command-prompt -I "#{window_name}" -p "Neuer Fenstername:" "rename-window '%%'" \
+        2>/dev/null || true
+
+    # Rechtsklick auf Fenstername -> Kontextmenü nur mit einfachen,
+    # nicht verschachtelten Kommandos (kein command-prompt hier drin,
+    # siehe Kommentar oben).
+    tmux bind-key -n MouseDown3Status \
+        display-menu -T '#[align=centre]Fenster #{window_index}' -t '{mouse}' \
+        "Neues Fenster" n "new-window -a -t '{mouse}'" \
+        "Schließen"     X "kill-window -t '{mouse}'" \
+        2>/dev/null || true
 }
- 
+
 ensure_session() {
     if ! session_exists; then
         # Fenster 0 "menu": das interaktive Steuerungsmenü selbst (Endlosschleife)
@@ -248,7 +266,7 @@ ensure_session() {
     fi
     configure_tmux_ux
 }
- 
+
 # ------------------------------------------------------------------
 # Hauptmenü
 # ------------------------------------------------------------------
@@ -260,7 +278,7 @@ main_menu() {
         "3) Vordefinierte Gruppe starten (je eigene Bash)" \
         "4) Beenden" \
         | fzf --prompt="Aktion wählen> " --height=30% --border)"
- 
+
     case "$choice" in
         1*)
             local name
@@ -299,7 +317,7 @@ main_menu() {
     esac
     return 0
 }
- 
+
 # ------------------------------------------------------------------
 # Main
 # ------------------------------------------------------------------
@@ -322,7 +340,7 @@ main() {
             exec bash
             ;;
     esac
- 
+
     # Normaler Start (ohne Argument): Session inkl. Menü-Fenster anlegen
     # bzw. an bestehende Session andocken.
     check_deps
@@ -330,6 +348,5 @@ main() {
     ensure_session
     tmux attach-session -t "$SESSION_NAME"
 }
- 
+
 main "$@"
- 
